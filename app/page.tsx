@@ -459,7 +459,7 @@ export default function Home() {
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
           <img src="/banner.jpg" alt="" aria-hidden
             className="w-full h-full object-cover"
-            style={{ filter: 'grayscale(0.92) brightness(0.5) contrast(1.08)', opacity: 0.85 }} />
+            style={{ filter: 'grayscale(0.92) brightness(0.48) contrast(1.05) blur(10px)', opacity: 0.85, transform: 'scale(1.06)' }} />
           <div className="absolute inset-0" style={{ background: 'linear-gradient(180deg, rgba(14,14,19,0.55), rgba(14,14,19,0.82))' }} />
           <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.6) 100%)' }} />
           <div className="absolute inset-0 mix-blend-screen opacity-[0.06]" style={{ background: '#3fd2d7' }} />
