@@ -61,6 +61,9 @@ export default function Home() {
     reverbWet: GainNode
   } | null>(null)
   const scanRef = useRef(0)
+  const prevAmpRef = useRef<Float32Array | null>(null)
+  const lastColRef = useRef({ x: -1, t: 0 })
+  const hueWaveRef = useRef<OscillatorType>('sine')
   const playingRef = useRef(false)
   const holdRef = useRef(false)
   const rafRef = useRef(0)
@@ -157,6 +160,14 @@ export default function Home() {
 
     const top = SCALES[ranked[0].key]
     const reason = `${warm ? 'warm' : cool ? 'cool' : 'neutral'} ${dark ? 'dark' : bright ? 'bright' : 'mid'} tones (H${Math.round(hue)}° · S${Math.round(sat * 100)}% · L${Math.round(light * 100)}%) → ${top.mood}`
+    // hue → timbre: warm=saw, cool=sine bell, green=triangle, purple=soft square, mono=FM-ish
+    let waveform: OscillatorType = 'sine'
+    if (muted) waveform = 'triangle'
+    else if (warm) waveform = 'sawtooth'
+    else if (hue >= 75 && hue < 150) waveform = 'triangle'
+    else if (hue >= 270 && hue < 320) waveform = 'square'
+    else if (cool) waveform = 'sine'
+    hueWaveRef.current = waveform
     setAnalysis({ scaleKey: ranked[0].key, rootNote: rootNoteNum, colors, reason, ranked })
     return { ranked, rootNoteNum }
   }, [])
@@ -285,6 +296,34 @@ export default function Home() {
     return 440 * Math.pow(2, (finalMidi - 69) / 12)
   }, [])
 
+
+  /* discrete plucked note — timbre from image hue */
+  const pluckNote = useCallback((freq: number, velocity: number, pan: number, wave: OscillatorType) => {
+    const audio = audioRef.current
+    if (!audio) return
+    const { ctx, master, reverbWet } = audio
+    const t = ctx.currentTime
+    const osc = ctx.createOscillator()
+    osc.type = wave
+    osc.frequency.value = freq
+    // low notes get a sub-octave sine for weight
+    const g = ctx.createGain()
+    const bright = clamp(velocity)
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.exponentialRampToValueAtTime(0.16 * (0.3 + bright * 0.7), t + 0.006)
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35 + bright * 1.3) // brighter pixel = longer ring
+    const p = ctx.createStereoPanner()
+    p.pan.value = pan
+    const lp = ctx.createBiquadFilter()
+    lp.type = 'lowpass'
+    lp.frequency.value = 1200 + bright * 5200
+    osc.connect(g).connect(lp).connect(p)
+    p.connect(master)
+    p.connect(reverbWet) // wet path: p -> reverbWet already includes mix? keep simple: also to delay line input
+    osc.start(t)
+    osc.stop(t + 2.2)
+  }, [])
+
   /* ── Sonify one scan position ── */
   const sonify = useCallback((pos: number) => {
     const audio = audioRef.current
@@ -301,9 +340,13 @@ export default function Home() {
     const crossLen = vertical ? w : h
     const px = vertical ? 0 : Math.round(pos * (w - 1))
     const py = vertical ? Math.round(pos * (h - 1)) : 0
+    const colKey = vertical ? py : px
 
     interface Bin { freq: number; amp: number; t: number }
     const bins: Bin[] = []
+    if (!prevAmpRef.current || prevAmpRef.current.length !== BINS) prevAmpRef.current = new Float32Array(BINS)
+    const prevAmp = prevAmpRef.current
+
     for (let i = 0; i < BINS; i++) {
       const t = i / (BINS - 1)
       const along = Math.round(t * (crossLen - 1))
@@ -313,27 +356,68 @@ export default function Home() {
       const r = imgData.data[idx] / 255, g = imgData.data[idx + 1] / 255, b = imgData.data[idx + 2] / 255
       const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
       const mx = Math.max(r, g, b), mn = Math.min(r, g, b)
-      const sat = mx - mn
-      const amp = clamp(lum * 0.85 + sat * 0.3)
-      if (amp <= st.threshold) continue
-      const cont = F_MAX * Math.pow(F_MIN / F_MAX, t)
-      bins.push({ freq: quantize(cont, rootMidi, scaleDef.intervals), amp, t })
+      const amp = clamp(lum * 0.85 + (mx - mn) * 0.3)
+      if (amp > st.threshold * 0.5) {
+        const cont = F_MAX * Math.pow(F_MIN / F_MAX, t)
+        bins.push({ freq: quantize(cont, rootMidi, scaleDef.intervals), amp, t })
+      }
     }
     bins.sort((A, B) => B.amp - A.amp)
 
+    /* pad: quiet sustained bed from top bins */
     const now = audio.ctx.currentTime
     audio.reverbWet.gain.setTargetAtTime(st.reverb, now, 0.1)
     audio.voices.forEach((v, i) => {
       const bin = bins[i]
-      if (bin) {
-        v.osc.frequency.setTargetAtTime(bin.freq, now, 0.04)
-        v.gain.gain.setTargetAtTime(Math.pow(bin.amp, 1.6) * 0.24, now, 0.06)
-        v.pan.pan.setTargetAtTime((bin.t - 0.5) * 1.4, now, 0.1)
+      if (bin && bin.amp > st.threshold) {
+        v.osc.frequency.setTargetAtTime(bin.freq, now, 0.05)
+        v.gain.gain.setTargetAtTime(Math.pow(bin.amp, 2) * 0.045, now, 0.12) // quiet bed
+        v.pan.pan.setTargetAtTime((bin.t - 0.5) * 1.4, now, 0.15)
       } else {
-        v.gain.gain.setTargetAtTime(0, now, 0.09)
+        v.gain.gain.setTargetAtTime(0, now, 0.15)
       }
     })
-  }, [analysis, quantize])
+
+    /* plucks: edge-triggered — a row turning BRIGHTER strikes a note */
+    const dwell = performance.now() - lastColRef.current.t
+    const newCol = colKey !== lastColRef.current.x && dwell > 36
+    if (newCol) {
+      lastColRef.current = { x: colKey, t: performance.now() }
+      // collect rising edges
+      const events: { i: number; delta: number }[] = []
+      const seen = new Set<number>()
+      for (const bin of bins) {
+        // find which bin index this is (approximate from t)
+        const bi = Math.round(bin.t * (BINS - 1))
+        if (seen.has(bi)) continue
+        seen.add(bi)
+        const delta = bin.amp - prevAmp[bi]
+        if (delta > 0.055 && bin.amp > st.threshold) {
+          events.push({ i: bi, delta })
+        }
+      }
+      events.sort((A, B) => B.delta - A.delta)
+      const wave = hueWaveRef.current
+      // strum: brightest changes first, spaced ~55ms — each column is an arpeggio
+      events.slice(0, 5).forEach((ev, k) => {
+        const t = ev.i / (BINS - 1)
+        const amp = prevAmp[ev.i] + ev.delta
+        const cont = F_MAX * Math.pow(F_MIN / F_MAX, t)
+        const freq = quantize(cont, rootMidi, scaleDef.intervals)
+        window.setTimeout(() => pluckNote(freq, amp, (t - 0.5) * 1.6, wave), k * 55)
+      })
+    }
+
+    // update prev amps for next column
+    for (let i = 0; i < BINS; i++) {
+      const t = i / (BINS - 1)
+      const along = Math.round(t * (crossLen - 1))
+      const x = vertical ? along : px
+      const y = vertical ? py : along
+      const idx = (y * w + x) * 4
+      prevAmp[i] = clamp(0.2126 * imgData.data[idx] / 255 + 0.7152 * imgData.data[idx + 1] / 255 + 0.0722 * imgData.data[idx + 2] / 255)
+    }
+  }, [analysis, quantize, pluckNote])
 
   /* ── Render loop ── */
   useEffect(() => {
