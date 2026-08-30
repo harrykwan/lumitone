@@ -1,8 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
-import { Instrument_Serif, JetBrains_Mono } from 'next/font/google'
+import { JetBrains_Mono } from 'next/font/google'
 
-const serif = Instrument_Serif({ weight: '400', style: ['normal', 'italic'], subsets: ['latin'], variable: '--font-serif' })
 const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-mono' })
 
 export const metadata: Metadata = {
@@ -12,7 +11,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${serif.variable} ${mono.variable}`}>
+    <html lang="en" className={`${mono.variable}`}>
       <body>{children}</body>
     </html>
   )

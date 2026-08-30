@@ -456,7 +456,7 @@ export default function Home() {
       {/* ── empty state: full-screen drop ── */}
       {!hasImage && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 cursor-pointer" onClick={() => fileRef.current?.click()}>
-          <div className="font-serif-display italic text-6xl text-white">lumitone</div>
+          <div className="font-mono-ui font-bold tracking-[0.28em] text-5xl text-white lowercase">lumitone</div>
           <div className="font-mono-ui text-[10px] tracking-[0.35em] text-white/40 uppercase">image → sound · sonification</div>
           <div className="mt-8 border border-dashed border-white/20 rounded-2xl px-16 py-10 text-center hover:border-[#3fd2d7]/50 transition-colors">
             <div className="text-white/40 mb-4 flex justify-center"><IcUpload /></div>
@@ -477,7 +477,7 @@ export default function Home() {
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none" style={{ animation: 'titleFade 3.6s ease forwards' }}>
           <div className="text-center">
             <div className="font-mono-ui text-[10px] tracking-[0.4em] text-[#3fd2d7] uppercase mb-3">scale match</div>
-            <div className="font-serif-display italic text-5xl sm:text-6xl text-white drop-shadow-[0_2px_16px_rgba(0,0,0,0.9)]">
+            <div className="font-mono-ui font-bold tracking-[0.12em] uppercase text-4xl sm:text-5xl text-white drop-shadow-[0_2px_16px_rgba(0,0,0,0.9)]">
               {NOTE_NAMES[a.rootNote]} {SCALES[a.scaleKey].name}
             </div>
             <div className="mt-3 font-mono-ui text-[11px] text-white/60">{a.reason}</div>
@@ -492,7 +492,7 @@ export default function Home() {
       {/* ── persistent corner badge ── */}
       {hasImage && (
         <div className={`absolute top-5 left-6 pointer-events-none transition-opacity duration-500 ${showUI || !playing ? 'opacity-100' : 'opacity-30'}`}>
-          <div className="font-serif-display italic text-white/90 text-xl drop-shadow-[0_1px_8px_rgba(0,0,0,0.9)]">lumitone</div>
+          <div className="font-mono-ui font-bold tracking-[0.22em] text-white/90 text-base lowercase drop-shadow-[0_1px_8px_rgba(0,0,0,0.9)]">lumitone</div>
           {a && <div className="font-mono-ui text-[10px] text-[#3fd2d7] tracking-wider mt-0.5">{NOTE_NAMES[a.rootNote]} {activeScaleName}</div>}
         </div>
       )}
