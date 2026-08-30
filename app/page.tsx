@@ -35,20 +35,22 @@ function clamp(v: number, lo = 0, hi = 1) { return Math.min(hi, Math.max(lo, v))
 /* ═══════════════ Component ═══════════════ */
 
 export default function Home() {
-  const imgCanvasRef = useRef<HTMLCanvasElement>(null)   // image rendered
-  const glowCanvasRef = useRef<HTMLCanvasElement>(null)  // scan line overlay
+  const imgCanvasRef = useRef<HTMLCanvasElement>(null)
+  const glowCanvasRef = useRef<HTMLCanvasElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const sourceImgRef = useRef<HTMLImageElement | null>(null)
   const audioRef = useRef<{
     ctx: AudioContext; master: GainNode; voices: { osc: OscillatorNode; gain: GainNode; pan: StereoPannerNode }[]
     reverbWet: GainNode
   } | null>(null)
-  const scanRef = useRef(0)          // 0..1 along axis
+  const scanRef = useRef(0)
   const playingRef = useRef(false)
-  const holdRef = useRef(false)      // scrub-hold mode
+  const holdRef = useRef(false)
   const rafRef = useRef(0)
   const imgDataRef = useRef<ImageData | null>(null)
   const dimsRef = useRef({ w: 0, h: 0 })
-  const settingsRef = useRef({ speed: 0.12, dir: 'lr' as 'lr'|'rl'|'tb', scaleKey: 'auto', rootNote: 'auto', threshold: 0.14, reverb: 0.4, octave: 2 })
+  const settingsRef = useRef({ speed: 0.12, dir: 'lr' as 'lr'|'rl'|'tb', scaleKey: 'auto', rootNote: 'auto', threshold: 0.14, reverb: 0.4 })
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [playing, setPlaying] = useState(false)
   const [hasImage, setHasImage] = useState(false)
@@ -59,16 +61,29 @@ export default function Home() {
   const [dir, setDir] = useState<'lr'|'rl'|'tb'>('lr')
   const [reverb, setReverb] = useState(0.4)
   const [threshold, setThreshold] = useState(0.14)
-  const [hint, setHint] = useState('')
+  const [showUI, setShowUI] = useState(true)
+  const [showTitle, setShowTitle] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
+  const [demoOpen, setDemoOpen] = useState(false)
 
-  useEffect(() => { settingsRef.current = { speed, dir, scaleKey, rootNote, threshold, reverb, octave: 2 } })
+  useEffect(() => { settingsRef.current = { speed, dir, scaleKey, rootNote, threshold, reverb } })
+
+  /* ── Auto-hide UI (cinema style) ── */
+  const pokeUI = useCallback(() => {
+    setShowUI(true)
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current)
+    hideTimerRef.current = setTimeout(() => {
+      if (playingRef.current && !showSettings && !demoOpen) setShowUI(false)
+    }, 2600)
+  }, [showSettings, demoOpen])
+  useEffect(() => { pokeUI() }, [pokeUI])
 
   /* ── Color analysis → scale/mode detection ── */
   const analyzeImage = useCallback((ctx: CanvasRenderingContext2D, w: number, h: number) => {
     const data = ctx.getImageData(0, 0, w, h).data
     let hx = 0, hy = 0, sat = 0, light = 0, n = 0
     const colorCounts = new Map<string, { count: number; r: number; g: number; b: number }>()
-    for (let i = 0; i < data.length; i += 16) { // sample every 4th px
+    for (let i = 0; i < data.length; i += 16) {
       const r = data[i] / 255, g = data[i + 1] / 255, b = data[i + 2] / 255
       const max = Math.max(r, g, b), min = Math.min(r, g, b)
       const l = (max + min) / 2
@@ -93,11 +108,9 @@ export default function Home() {
     let hue = (Math.atan2(hy, hx) * 180 / Math.PI + 360) % 360
     sat /= n; light /= n
 
-    // dominant colors (top 5 quantized)
     const colors = [...colorCounts.values()].sort((a, b) => b.count - a.count).slice(0, 5)
       .map(c => `rgb(${c.r},${c.g},${c.b})`)
 
-    // ── Scale scoring heuristics ──
     const warm = hue < 75 || hue > 320
     const cool = hue >= 150 && hue <= 270
     const bright = light > 0.55, dark = light < 0.35
@@ -116,14 +129,13 @@ export default function Home() {
     if (dark && sat < 0.15) { scores.blues += 1.6; scores.minPent += 1.0 }
     if (light > 0.7 && sat < 0.2) { scores.lydian += 1.5; scores.wholeTone += 1.2 }
     if (sat > 0.6) { scores.harmMinor += 1.2; scores.phrygDom += 1.0; scores.lydianDom += 0.9 }
-    if (hue >= 75 && hue < 150) { scores.dorian += 1.6; scores.mixolydian += 1.0 } // greens
-    if (hue >= 270 && hue < 320) { scores.lydian += 1.6; scores.meloMinor += 1.0 } // purples
+    if (hue >= 75 && hue < 150) { scores.dorian += 1.6; scores.mixolydian += 1.0 }
+    if (hue >= 270 && hue < 320) { scores.lydian += 1.6; scores.meloMinor += 1.0 }
     scores.chromatic = 0.05
 
     const ranked = Object.entries(scores).map(([key, score]) => ({ key, score }))
       .sort((a, b) => b.score - a.score)
 
-    // root from hue → circle of fifths wheel (C at 0°/360°)
     const rootNoteNum = Math.round((1 - hue / 360) * 12) % 12
 
     const top = SCALES[ranked[0].key]
@@ -132,35 +144,60 @@ export default function Home() {
     return { ranked, rootNoteNum }
   }, [])
 
+  /* ── Draw image cover-fit to screen ── */
+  const renderCover = useCallback(() => {
+    const img = sourceImgRef.current
+    const canvas = imgCanvasRef.current
+    if (!img || !canvas) return
+    const w = window.innerWidth, h = window.innerHeight
+    canvas.width = w; canvas.height = h
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })!
+    ctx.fillStyle = '#000'
+    ctx.fillRect(0, 0, w, h)
+    const scale = Math.max(w / img.width, h / img.height)
+    const dw = img.width * scale, dh = img.height * scale
+    const dx = (w - dw) / 2, dy = (h - dh) / 2
+    ctx.drawImage(img, dx, dy, dw, dh)
+    imgDataRef.current = ctx.getImageData(0, 0, w, h)
+    dimsRef.current = { w, h }
+    const glow = glowCanvasRef.current
+    if (glow) { glow.width = w; glow.height = h }
+  }, [])
+
+  useEffect(() => {
+    if (!hasImage) return
+    const onResize = () => renderCover()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [hasImage, renderCover])
+
   /* ── Load image ── */
   const loadImage = useCallback((src: string) => {
     const img = new Image()
     img.crossOrigin = 'anonymous'
     img.onload = () => {
-      const canvas = imgCanvasRef.current!
-      const maxW = 900
-      const scale = Math.min(1, maxW / img.width)
-      const w = Math.round(img.width * scale), h = Math.round(img.height * scale)
-      canvas.width = w; canvas.height = h
-      const ctx = canvas.getContext('2d', { willReadFrequently: true })!
-      ctx.drawImage(img, 0, 0, w, h)
-      imgDataRef.current = ctx.getImageData(0, 0, w, h)
-      dimsRef.current = { w, h }
-      const glow = glowCanvasRef.current!
-      glow.width = w; glow.height = h
+      sourceImgRef.current = img
       setHasImage(true)
-      scanRef.current = 0
-      analyzeImage(ctx, w, h)
+      requestAnimationFrame(() => {
+        renderCover()
+        const canvas = imgCanvasRef.current!
+        analyzeImage(canvas.getContext('2d', { willReadFrequently: true })!, canvas.width, canvas.height)
+        // title card moment
+        setShowTitle(true)
+        setTimeout(() => setShowTitle(false), 3600)
+        playingRef.current = false
+        setPlaying(false)
+        scanRef.current = 0
+      })
     }
     img.src = src
-  }, [analyzeImage])
+  }, [analyzeImage, renderCover])
 
-  /* ── Demo images (generated gradients) ── */
   const loadDemo = useCallback((kind: 'sunset' | 'ocean' | 'forest' | 'noir') => {
     const c = document.createElement('canvas')
-    c.width = 800; c.height = 500
+    c.width = 1600; c.height = 1000
     const ctx = c.getContext('2d', { willReadFrequently: true })!
-    const g = ctx.createLinearGradient(0, 0, 0, 500)
+    const g = ctx.createLinearGradient(0, 0, 0, 1000)
     const presets = {
       sunset: ['#2b1055', '#7597de', '#ff9e5e', '#ffd39b'],
       ocean: ['#020d1f', '#0a3d62', '#1c8fb0', '#9be3e8'],
@@ -170,15 +207,15 @@ export default function Home() {
     const stops = presets[kind]
     stops.forEach((col, i) => g.addColorStop(i / (stops.length - 1), col))
     ctx.fillStyle = g
-    ctx.fillRect(0, 0, 800, 500)
-    // scatter some blobs for texture
-    for (let i = 0; i < 120; i++) {
-      const rg = ctx.createRadialGradient(Math.random() * 800, Math.random() * 500, 0, Math.random() * 800, Math.random() * 500, 40 + Math.random() * 90)
+    ctx.fillRect(0, 0, 1600, 1000)
+    for (let i = 0; i < 240; i++) {
+      const x = Math.random() * 1600, y = Math.random() * 1000
+      const rg = ctx.createRadialGradient(x, y, 0, x, y, 40 + Math.random() * 120)
       const col = stops[Math.floor(Math.random() * stops.length)]
       rg.addColorStop(0, col + 'cc')
       rg.addColorStop(1, col + '00')
       ctx.fillStyle = rg
-      ctx.fillRect(0, 0, 800, 500)
+      ctx.fillRect(x - 160, y - 160, 320, 320)
     }
     loadImage(c.toDataURL())
   }, [loadImage])
@@ -198,7 +235,7 @@ export default function Home() {
     reverb.connect(fb).connect(damp).connect(reverb)
     reverb.connect(reverbWet).connect(master)
 
-    const voices = Array.from({ length: VOICES }, (_, i) => {
+    const voices = Array.from({ length: VOICES }, () => {
       const osc = ctx.createOscillator()
       osc.type = 'sine'
       osc.frequency.value = 220
@@ -241,10 +278,9 @@ export default function Home() {
     const a = analysis ?? { scaleKey: 'minPent', rootNote: 9 }
     const scaleDef = SCALES[st.scaleKey === 'auto' ? a.scaleKey : st.scaleKey] ?? SCALES.minPent
     const rootPc = st.rootNote === 'auto' ? a.rootNote : NOTE_NAMES.indexOf(st.rootNote)
-    const rootMidi = 36 + (((rootPc % 12) + 12) % 12) // low octave base
+    const rootMidi = 36 + (((rootPc % 12) + 12) % 12)
 
     const vertical = st.dir === 'tb'
-    const axisLen = vertical ? h : w
     const crossLen = vertical ? w : h
     const px = vertical ? 0 : Math.round(pos * (w - 1))
     const py = vertical ? Math.round(pos * (h - 1)) : 0
@@ -259,13 +295,11 @@ export default function Home() {
       const idx = (y * w + x) * 4
       const r = imgData.data[idx] / 255, g = imgData.data[idx + 1] / 255, b = imgData.data[idx + 2] / 255
       const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
-      // saturation adds shimmer to amplitude
       const mx = Math.max(r, g, b), mn = Math.min(r, g, b)
       const sat = mx - mn
       const amp = clamp(lum * 0.85 + sat * 0.3)
       if (amp <= st.threshold) continue
-      // t=0 at top/left → high freq; t=1 bottom/right → low freq  (lower = lower freq)
-      const cont = F_MAX * Math.pow(F_MIN / F_MAX, vertical ? t : t)
+      const cont = F_MAX * Math.pow(F_MIN / F_MAX, t)
       bins.push({ freq: quantize(cont, rootMidi, scaleDef.intervals), amp, t })
     }
     bins.sort((A, B) => B.amp - A.amp)
@@ -300,27 +334,19 @@ export default function Home() {
       const x = vertical ? 0 : pos * w
       const y = vertical ? pos * h : 0
 
-      // trail
+      const from = st.dir === 'rl' ? x : x - 70
       const grad = vertical
-        ? gctx.createLinearGradient(0, y - (st.dir === 'tb' ? 60 : 0), 0, y)
-        : gctx.createLinearGradient(x - (st.dir === 'lr' ? 60 : 0), 0, x, 0)
-      if (st.dir === 'rl') {
-        grad.addColorStop(0, 'rgba(63,210,215,0)')
-        grad.addColorStop(1, 'rgba(63,210,215,0.25)')
-      } else {
-        grad.addColorStop(0, 'rgba(63,210,215,0.25)')
-        grad.addColorStop(1, 'rgba(63,210,215,0)')
-      }
-      gctx.fillStyle = vertical
-        ? (st.dir === 'tb' ? grad : grad)
-        : grad
-      if (vertical) gctx.fillRect(0, Math.max(0, y - 60), w, 60)
-      else gctx.fillRect(Math.max(0, x - 60), 0, 60, h)
+        ? gctx.createLinearGradient(0, y - 70, 0, y)
+        : gctx.createLinearGradient(from, 0, from + 70, 0)
+      grad.addColorStop(0, 'rgba(63,210,215,0)')
+      grad.addColorStop(1, 'rgba(63,210,215,0.22)')
+      gctx.fillStyle = grad
+      if (vertical) gctx.fillRect(0, Math.max(0, y - 70), w, 70)
+      else gctx.fillRect(Math.max(0, x - (st.dir === 'rl' ? 0 : 70)), 0, 70, h)
 
-      // scan line
       gctx.shadowColor = '#3fd2d7'
-      gctx.shadowBlur = 14
-      gctx.strokeStyle = 'rgba(150,240,244,0.95)'
+      gctx.shadowBlur = 18
+      gctx.strokeStyle = 'rgba(160,242,246,0.95)'
       gctx.lineWidth = 2
       gctx.beginPath()
       if (vertical) { gctx.moveTo(0, y); gctx.lineTo(w, y) }
@@ -329,8 +355,7 @@ export default function Home() {
       gctx.shadowBlur = 0
 
       if (playingRef.current && !holdRef.current) {
-        const dt = 1 / 60
-        const step = st.speed * dt
+        const step = st.speed / 60
         let next = pos + step
         if (next > 1) next = 0
         scanRef.current = next
@@ -341,36 +366,35 @@ export default function Home() {
     return () => cancelAnimationFrame(rafRef.current)
   }, [hasImage, sonify])
 
-  /* ── Scrub/hold interactions ── */
+  /* ── Scrub/hold ── */
   const scrubTo = useCallback((clientX: number, clientY: number) => {
-    const glow = glowCanvasRef.current
-    if (!glow) return
-    const rect = glow.getBoundingClientRect()
     const st = settingsRef.current
     const vertical = st.dir === 'tb'
     const frac = vertical
-      ? clamp((clientY - rect.top) / rect.height)
-      : clamp((clientX - rect.left) / rect.width)
+      ? clamp(clientY / window.innerHeight)
+      : clamp(clientX / window.innerWidth)
     scanRef.current = st.dir === 'rl' ? 1 - frac : frac
     sonify(scanRef.current)
   }, [sonify])
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (!playingRef.current) return
+    if ((e.target as HTMLElement).closest('[ data-ui]')) return
     holdRef.current = true
     scrubTo(e.clientX, e.clientY)
   }
   const onPointerMove = (e: React.PointerEvent) => {
+    pokeUI()
     if (!holdRef.current) return
     scrubTo(e.clientX, e.clientY)
   }
   const onPointerUp = () => { holdRef.current = false }
 
-  /* ── Controls ── */
   const togglePlay = () => {
     ensureAudio()
     playingRef.current = !playingRef.current
     setPlaying(playingRef.current)
+    pokeUI()
     if (!playingRef.current) {
       audioRef.current?.voices.forEach(v => v.gain.gain.setTargetAtTime(0, audioRef.current!.ctx.currentTime, 0.1))
     }
@@ -388,138 +412,142 @@ export default function Home() {
   const activeScaleName = scaleKey === 'auto' && a ? SCALES[a.scaleKey].name : SCALES[scaleKey]?.name
   const activeRoot = rootNote === 'auto' && a ? NOTE_NAMES[a.rootNote] : rootNote
 
-  return (
-    <main className="min-h-screen bg-[#0e0e13] text-[#e8e4da]">
-      <div className="max-w-5xl mx-auto px-6 py-10">
-        {/* header */}
-        <div className="flex items-baseline justify-between mb-2">
-          <h1 className="text-3xl font-bold italic tracking-tight">lumitone</h1>
-          <span className="font-mono text-[10px] tracking-[0.25em] text-[#4a4652] uppercase">image → sound · sonification</span>
-        </div>
-        <p className="text-[#8a8492] text-sm mb-8 max-w-xl">
-          Drop an image. A scan line sweeps through it — bright pixels sing, dark pixels stay silent, low pixels are low notes.
-          The color tone of the photo picks the scale. Hold/drag the line to sustain a moment.
-        </p>
+  const chip = 'px-4 py-2 rounded-full font-mono text-[11px] tracking-wider border border-white/15 bg-black/50 text-white/70 hover:text-white hover:border-[#3fd2d7]/50 backdrop-blur-md transition-colors cursor-pointer'
 
-        {/* dropzone */}
-        {!hasImage && (
-          <div
-            onClick={() => fileRef.current?.click()}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) { const r = new FileReader(); r.onload = () => loadImage(r.result as string); r.readAsDataURL(f) } }}
-            className="border-2 border-dashed border-[#26262e] rounded-2xl p-14 text-center cursor-pointer hover:border-[#3fd2d7]/50 transition-colors"
-          >
-            <div className="text-5xl mb-4">🖼️</div>
-            <div className="font-mono text-xs tracking-widest text-[#6f6a76] uppercase">drop an image / click to browse</div>
-            <div className="mt-6 flex gap-2 justify-center flex-wrap">
+  return (
+    <main
+      className="fixed inset-0 bg-black overflow-hidden select-none"
+      onPointerMove={onPointerMove}
+      onPointerDown={onPointerDown}
+      onPointerUp={onPointerUp}
+      onPointerLeave={onPointerUp}
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) { const r = new FileReader(); r.onload = () => loadImage(r.result as string); r.readAsDataURL(f) } }}
+    >
+      {/* canvases — always mounted */}
+      <canvas ref={imgCanvasRef} className="absolute inset-0" />
+      <canvas ref={glowCanvasRef} className="absolute inset-0" style={{ cursor: playing ? 'crosshair' : 'default' }} />
+
+      {/* cinematic vignette + grain */}
+      {hasImage && (
+        <>
+          <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse at center, transparent 52%, rgba(0,0,0,0.55) 100%)' }} />
+          <div className="absolute inset-0 pointer-events-none opacity-[0.04]" style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")` }} />
+        </>
+      )}
+
+      {/* ── empty state: full-screen drop ── */}
+      {!hasImage && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 cursor-pointer" onClick={() => fileRef.current?.click()}>
+          <div className="font-bold italic tracking-tight text-5xl text-white">lumitone</div>
+          <div className="font-mono text-[10px] tracking-[0.35em] text-white/40 uppercase">image → sound · sonification</div>
+          <div className="mt-6 border-2 border-dashed border-white/15 rounded-2xl px-16 py-10 text-center hover:border-[#3fd2d7]/50 transition-colors">
+            <div className="text-4xl mb-3">🖼️</div>
+            <div className="font-mono text-xs tracking-widest text-white/50 uppercase">drop an image anywhere · or click</div>
+          </div>
+          <div className="flex gap-2 mt-2" data-ui>
+            {(['sunset', 'ocean', 'forest', 'noir'] as const).map(k => (
+              <button key={k} className={chip} onClick={(e) => { e.stopPropagation(); loadDemo(k) }}>try {k}</button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <input ref={fileRef} type="file" accept="image/*" hidden onChange={onFile} />
+
+      {/* ── title card (movie style, on image load) ── */}
+      {showTitle && a && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none" style={{ animation: 'titleFade 3.6s ease forwards' }}>
+          <div className="text-center">
+            <div className="font-mono text-[10px] tracking-[0.4em] text-[#3fd2d7] uppercase mb-3">scale match</div>
+            <div className="text-4xl sm:text-5xl font-bold italic text-white drop-shadow-[0_2px_16px_rgba(0,0,0,0.8)]">
+              {NOTE_NAMES[a.rootNote]} {SCALES[a.scaleKey].name}
+            </div>
+            <div className="mt-3 font-mono text-[11px] text-white/60">{a.reason}</div>
+            <div className="mt-5 flex gap-1.5 justify-center">
+              {a.colors.map((c, i) => <div key={i} className="w-6 h-6 rounded-md border border-white/20" style={{ background: c }} />)}
+            </div>
+          </div>
+        </div>
+      )}
+      <style>{`@keyframes titleFade { 0%{opacity:0} 12%{opacity:1} 78%{opacity:1} 100%{opacity:0} }`}</style>
+
+      {/* ── persistent corner badge ── */}
+      {hasImage && (
+        <div className={`absolute top-5 left-6 pointer-events-none transition-opacity duration-500 ${showUI || !playing ? 'opacity-100' : 'opacity-30'}`}>
+          <div className="font-bold italic text-white/90 text-lg drop-shadow-[0_1px_8px_rgba(0,0,0,0.9)]">lumitone</div>
+          {a && <div className="font-mono text-[10px] text-[#3fd2d7] tracking-wider mt-0.5">{NOTE_NAMES[a.rootNote]} {activeScaleName}</div>}
+        </div>
+      )}
+
+      {/* ── cinema control bar ── */}
+      {hasImage && (
+        <div
+          data-ui
+          className={`absolute bottom-0 inset-x-0 pb-6 pt-16 px-6 flex justify-center transition-all duration-500 ${showUI || !playing ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-3 pointer-events-none'}`}
+          style={{ background: 'linear-gradient(180deg, transparent, rgba(0,0,0,0.65))' }}
+        >
+          <div className="flex items-center gap-2 flex-wrap justify-center">
+            <button onClick={togglePlay}
+              className={`w-12 h-12 rounded-full font-bold flex items-center justify-center transition-colors ${playing ? 'bg-white text-black' : 'bg-[#3fd2d7]/15 text-[#3fd2d7] border border-[#3fd2d7]/50'}`}>
+              {playing ? '⏸' : '▶'}
+            </button>
+
+            <select value={dir} onChange={(e) => setDir(e.target.value as 'lr'|'rl'|'tb')} className={chip + ' appearance-none'}>
+              <option className="bg-[#111]" value="lr">left → right</option>
+              <option className="bg-[#111]" value="rl">right → left</option>
+              <option className="bg-[#111]" value="tb">top ↓ bottom</option>
+            </select>
+
+            <select value={scaleKey} onChange={(e) => setScaleKey(e.target.value)} className={chip + ' appearance-none'}>
+              <option className="bg-[#111]" value="auto">auto{a ? ` — ${SCALES[a.scaleKey].name}` : ''}</option>
+              {Object.entries(SCALES).map(([k, s]) => <option className="bg-[#111]" key={k} value={k}>{s.name}</option>)}
+            </select>
+
+            <select value={rootNote} onChange={(e) => setRootNote(e.target.value)} className={chip + ' appearance-none'}>
+              <option className="bg-[#111]" value="auto">auto{a ? ` — ${NOTE_NAMES[a.rootNote]}` : ''}</option>
+              {NOTE_NAMES.map(n => <option className="bg-[#111]" key={n} value={n}>{n}</option>)}
+            </select>
+
+            <button className={chip} onClick={() => setDemoOpen(v => !v)}>demos ▾</button>
+            <button className={chip} onClick={() => setShowSettings(v => !v)}>⚙ tune</button>
+            <button className={chip} onClick={() => fileRef.current?.click()}>new image</button>
+          </div>
+
+          {/* demo row */}
+          {demoOpen && (
+            <div className="absolute bottom-20 inset-x-0 flex justify-center gap-2" data-ui>
               {(['sunset', 'ocean', 'forest', 'noir'] as const).map(k => (
-                <button key={k} onClick={(e) => { e.stopPropagation(); loadDemo(k) }}
-                  className="font-mono text-[10px] px-3 py-1.5 rounded-full border border-[#26262e] text-[#6f6a76] hover:text-[#e8e4da] hover:border-[#3fd2d7]/40">
-                  try {k}
-                </button>
+                <button key={k} className={chip} onClick={() => { loadDemo(k); setDemoOpen(false) }}>{k}</button>
               ))}
             </div>
-          </div>
-        )}
+          )}
 
-        <input ref={fileRef} type="file" accept="image/*" hidden onChange={onFile} />
-
-        {/* canvas */}
-        <div className={`relative rounded-2xl overflow-hidden border border-[#26262e] select-none touch-none ${hasImage ? '' : 'hidden'}`}
-            onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp}>
-            <canvas ref={imgCanvasRef} className="w-full block" />
-            <canvas ref={glowCanvasRef} className="absolute inset-0 w-full h-full cursor-crosshair" />
-        </div>
-
-        {/* analysis */}
-        {a && (
-          <div className="mt-5 rounded-xl border border-[#26262e] bg-[#17171d] p-4 flex flex-wrap items-center gap-4">
-            <div className="flex gap-1.5">
-              {a.colors.map((c, i) => <div key={i} className="w-7 h-7 rounded-md border border-white/10" style={{ background: c }} />)}
-            </div>
-            <div className="flex-1 min-w-[240px]">
-              <div className="font-mono text-[10px] tracking-[0.2em] text-[#3fd2d7] uppercase">scale match</div>
-              <div className="text-sm mt-0.5">
-                <b>{NOTE_NAMES[a.rootNote]} {SCALES[a.scaleKey].name}</b>
-                <span className="text-[#6f6a76] text-xs ml-2">— {a.reason}</span>
-              </div>
-              <div className="font-mono text-[10px] text-[#4a4652] mt-1">
-                alternates: {a.ranked.slice(1, 4).map(r => NOTE_NAMES[a.rootNote] + ' ' + SCALES[r.key].name).join(' · ')}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* controls */}
-        {hasImage && (
-          <div className="mt-5 grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            <button onClick={togglePlay}
-              className={`rounded-xl font-semibold text-sm py-3.5 transition-colors ${playing ? 'bg-[#e8e4da] text-[#0e0e13]' : 'bg-[#3fd2d7]/10 text-[#3fd2d7] border border-[#3fd2d7]/40'}`}>
-              {playing ? '⏸ pause' : '▶ play'}
-            </button>
-
-            <label className="rounded-xl border border-[#26262e] bg-[#17171d] px-4 py-2.5">
-              <div className="font-mono text-[9px] tracking-[0.2em] text-[#6f6a76] uppercase">direction</div>
-              <select value={dir} onChange={(e) => setDir(e.target.value as 'lr'|'rl'|'tb')}
-                className="bg-transparent w-full outline-none text-sm mt-0.5">
-                <option className="bg-[#17171d]" value="lr">left → right</option>
-                <option className="bg-[#17171d]" value="rl">right → left</option>
-                <option className="bg-[#17171d]" value="tb">top ↓ bottom</option>
-              </select>
-            </label>
-
-            <label className="rounded-xl border border-[#26262e] bg-[#17171d] px-4 py-2.5">
-              <div className="font-mono text-[9px] tracking-[0.2em] text-[#6f6a76] uppercase">scale / mode</div>
-              <select value={scaleKey} onChange={(e) => setScaleKey(e.target.value)}
-                className="bg-transparent w-full outline-none text-sm mt-0.5">
-                <option className="bg-[#17171d]" value="auto">auto {a ? `(${SCALES[a.scaleKey].name})` : ''}</option>
-                {Object.entries(SCALES).map(([k, s]) => (
-                  <option className="bg-[#17171d]" key={k} value={k}>{s.name}</option>
+          {/* settings popover */}
+          {showSettings && (
+            <div className="absolute bottom-20 inset-x-0 flex justify-center" data-ui>
+              <div className="rounded-2xl border border-white/15 bg-black/70 backdrop-blur-xl p-5 grid grid-cols-3 gap-x-8 gap-y-4 w-[560px] max-w-[92vw]">
+                {([
+                  ['speed', speed, 0.02, 0.5, 0.01, setSpeed],
+                  ['reverb', reverb, 0, 1, 0.01, setReverb],
+                  ['brightness gate', threshold, 0, 0.6, 0.01, setThreshold],
+                ] as const).map(([label, val, min, max, step, setter]) => (
+                  <label key={label}>
+                    <div className="font-mono text-[9px] tracking-[0.2em] text-white/40 uppercase mb-1.5">{label} — {Math.round((val as number) * 100)}</div>
+                    <input type="range" min={min} max={max} step={step} value={val}
+                      onChange={(e) => (setter as (v: number) => void)(+e.target.value)}
+                      className="w-full accent-[#3fd2d7]" />
+                  </label>
                 ))}
-              </select>
-            </label>
-
-            <label className="rounded-xl border border-[#26262e] bg-[#17171d] px-4 py-2.5">
-              <div className="font-mono text-[9px] tracking-[0.2em] text-[#6f6a76] uppercase">root</div>
-              <select value={rootNote} onChange={(e) => setRootNote(e.target.value)}
-                className="bg-transparent w-full outline-none text-sm mt-0.5">
-                <option className="bg-[#17171d]" value="auto">auto {a ? `(${NOTE_NAMES[a.rootNote]})` : ''}</option>
-                {NOTE_NAMES.map(n => <option className="bg-[#17171d]" key={n} value={n}>{n}</option>)}
-              </select>
-            </label>
-
-            <label className="rounded-xl border border-[#26262e] bg-[#17171d] px-4 py-2.5">
-              <div className="font-mono text-[9px] tracking-[0.2em] text-[#6f6a76] uppercase">scan speed — {Math.round(speed * 100)}</div>
-              <input type="range" min="0.02" max="0.5" step="0.01" value={speed}
-                onChange={(e) => setSpeed(+e.target.value)} className="w-full accent-[#3fd2d7] mt-2" />
-            </label>
-
-            <label className="rounded-xl border border-[#26262e] bg-[#17171d] px-4 py-2.5">
-              <div className="font-mono text-[9px] tracking-[0.2em] text-[#6f6a76] uppercase">reverb — {Math.round(reverb * 100)}</div>
-              <input type="range" min="0" max="1" step="0.01" value={reverb}
-                onChange={(e) => setReverb(+e.target.value)} className="w-full accent-[#3fd2d7] mt-2" />
-            </label>
-
-            <label className="rounded-xl border border-[#26262e] bg-[#17171d] px-4 py-2.5">
-              <div className="font-mono text-[9px] tracking-[0.2em] text-[#6f6a76] uppercase">brightness gate — {Math.round(threshold * 100)}</div>
-              <input type="range" min="0" max="0.6" step="0.01" value={threshold}
-                onChange={(e) => setThreshold(+e.target.value)} className="w-full accent-[#3fd2d7] mt-2" />
-            </label>
-
-            <button onClick={() => fileRef.current?.click()}
-              className="rounded-xl border border-[#26262e] bg-[#17171d] font-semibold text-sm py-3.5 text-[#6f6a76] hover:text-[#e8e4da]">
-              ↺ new image
-            </button>
-          </div>
-        )}
-
-        {playing && (
-          <div className="mt-4 font-mono text-[10px] text-[#4a4652] tracking-wider text-center">
-            hold & drag on the image to sustain a moment · {activeScaleName} · {activeRoot}
-          </div>
-        )}
-        {hint && <div className="mt-3 text-center font-mono text-xs text-[#c2263e]">{hint}</div>}
-      </div>
+                <div className="col-span-3 font-mono text-[10px] text-white/35 text-center">
+                  hold &amp; drag the image to sustain a moment
+                  {a && ` · alternates: ${a.ranked.slice(1, 3).map(r => SCALES[r.key].name).join(', ')}`}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </main>
   )
 }
