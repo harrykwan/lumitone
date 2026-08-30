@@ -453,8 +453,17 @@ export default function Home() {
         </>
       )}
 
-      {/* ── empty state: full-screen drop ── */}
+      {/* ── empty state: banner backdrop + full-screen drop ── */}
       {!hasImage && (
+        <>
+        <div className="absolute inset-0 pointer-events-none overflow-hidden">
+          <img src="/banner.jpg" alt="" aria-hidden
+            className="w-full h-full object-cover"
+            style={{ filter: 'grayscale(0.92) brightness(0.5) contrast(1.08)', opacity: 0.85 }} />
+          <div className="absolute inset-0" style={{ background: 'linear-gradient(180deg, rgba(14,14,19,0.55), rgba(14,14,19,0.82))' }} />
+          <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.6) 100%)' }} />
+          <div className="absolute inset-0 mix-blend-screen opacity-[0.06]" style={{ background: '#3fd2d7' }} />
+        </div>
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 cursor-pointer" onClick={() => fileRef.current?.click()}>
           <div className="font-mono-ui font-bold tracking-[0.28em] text-5xl text-white lowercase">lumitone</div>
           <div className="font-mono-ui text-[10px] tracking-[0.35em] text-white/40 uppercase">image → sound · sonification</div>
@@ -468,6 +477,7 @@ export default function Home() {
             ))}
           </div>
         </div>
+        </>
       )}
 
       <input ref={fileRef} type="file" accept="image/*" hidden onChange={onFile} />
