@@ -62,6 +62,7 @@ export default function Home() {
   } | null>(null)
   const scanRef = useRef(0)
   const prevAmpRef = useRef<Float32Array | null>(null)
+  const lastFireRef = useRef<Float32Array | null>(null)
   const lastColRef = useRef({ x: -1, t: 0 })
   const hueWaveRef = useRef<OscillatorType>('sine')
   const playingRef = useRef(false)
@@ -378,30 +379,42 @@ export default function Home() {
       }
     })
 
-    /* plucks: edge-triggered — a row turning BRIGHTER strikes a note */
-    const dwell = performance.now() - lastColRef.current.t
-    const newCol = colKey !== lastColRef.current.x && dwell > 36
-    if (newCol) {
-      lastColRef.current = { x: colKey, t: performance.now() }
-      // collect rising edges
-      const events: { i: number; delta: number }[] = []
+    /* plucks: edge-triggered accents + level-triggered keep-alive */
+    const nowMs = performance.now()
+    const dwell = nowMs - lastColRef.current.t
+    const prevX = lastColRef.current.x
+    const newCol = colKey !== prevX && dwell > 36
+    if (!lastFireRef.current) lastFireRef.current = new Float32Array(BINS)
+    const lastFire = lastFireRef.current
+
+    // loop wraparound: reset prev amps to avoid false mega-edge burst
+    if (newCol && prevX > 0 && colKey < prevX - ((vertical ? h : w) * 0.5)) {
+      for (let i = 0; i < BINS; i++) prevAmp[i] = 0
+      lastColRef.current = { x: colKey, t: nowMs }
+    } else if (newCol) {
+      lastColRef.current = { x: colKey, t: nowMs }
+      const events: { i: number; delta: number; pri: number }[] = []
       const seen = new Set<number>()
       for (const bin of bins) {
-        // find which bin index this is (approximate from t)
         const bi = Math.round(bin.t * (BINS - 1))
         if (seen.has(bi)) continue
         seen.add(bi)
         const delta = bin.amp - prevAmp[bi]
-        if (delta > 0.055 && bin.amp > st.threshold) {
-          events.push({ i: bi, delta })
+        // rising edge → accent note (high priority)
+        if (delta > 0.05 && bin.amp > st.threshold) {
+          events.push({ i: bi, delta, pri: delta + 1 })
+        }
+        // bright row that hasn't fired recently → keep-alive note
+        else if (bin.amp > st.threshold + 0.2 && nowMs - lastFire[bi] > 280) {
+          events.push({ i: bi, delta: 0.02, pri: bin.amp })
         }
       }
-      events.sort((A, B) => B.delta - A.delta)
+      events.sort((A, B) => B.pri - A.pri)
       const wave = hueWaveRef.current
-      // strum: brightest changes first, spaced ~55ms — each column is an arpeggio
       events.slice(0, 5).forEach((ev, k) => {
         const t = ev.i / (BINS - 1)
-        const amp = prevAmp[ev.i] + ev.delta
+        const amp = Math.max(prevAmp[ev.i] + ev.delta, st.threshold + 0.05)
+        lastFire[ev.i] = nowMs + k * 55
         const cont = F_MAX * Math.pow(F_MIN / F_MAX, t)
         const freq = quantize(cont, rootMidi, scaleDef.intervals)
         window.setTimeout(() => pluckNote(freq, amp, (t - 0.5) * 1.6, wave), k * 55)
