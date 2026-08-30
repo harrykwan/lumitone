@@ -5,4 +5,7 @@ html, body {
   color: #e8e4da;
   margin: 0;
   overscroll-behavior: none;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", sans-serif;
 }
+.font-serif-display { font-family: var(--font-serif), Georgia, serif; }
+.font-mono-ui { font-family: var(--font-mono), monospace; }

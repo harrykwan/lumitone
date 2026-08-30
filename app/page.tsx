@@ -32,6 +32,23 @@ const VOICES = 22
 
 function clamp(v: number, lo = 0, hi = 1) { return Math.min(hi, Math.max(lo, v)) }
 
+/* minimal stroke icons — no emoji */
+const IcPlay = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg>
+)
+const IcPause = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4.5" width="4" height="15" rx="1"/><rect x="14" y="4.5" width="4" height="15" rx="1"/></svg>
+)
+const IcTune = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M4 12h16"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>
+)
+const IcChevron = () => (
+  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M6 9l6 6 6-6"/></svg>
+)
+const IcUpload = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M12 16V5m0 0l-4 4m4-4l4 4"/><path d="M4 19h16"/></svg>
+)
+
 /* ═══════════════ Component ═══════════════ */
 
 export default function Home() {
@@ -412,7 +429,7 @@ export default function Home() {
   const activeScaleName = scaleKey === 'auto' && a ? SCALES[a.scaleKey].name : SCALES[scaleKey]?.name
   const activeRoot = rootNote === 'auto' && a ? NOTE_NAMES[a.rootNote] : rootNote
 
-  const chip = 'px-4 py-2 rounded-full font-mono text-[11px] tracking-wider border border-white/15 bg-black/50 text-white/70 hover:text-white hover:border-[#3fd2d7]/50 backdrop-blur-md transition-colors cursor-pointer'
+  const chip = 'px-4 py-2 rounded-full font-mono-ui text-[11px] tracking-wider border border-white/15 bg-black/50 text-white/70 hover:text-white hover:border-[#3fd2d7]/50 backdrop-blur-md transition-colors cursor-pointer'
 
   return (
     <main
@@ -439,11 +456,11 @@ export default function Home() {
       {/* ── empty state: full-screen drop ── */}
       {!hasImage && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 cursor-pointer" onClick={() => fileRef.current?.click()}>
-          <div className="font-bold italic tracking-tight text-5xl text-white">lumitone</div>
-          <div className="font-mono text-[10px] tracking-[0.35em] text-white/40 uppercase">image → sound · sonification</div>
-          <div className="mt-6 border-2 border-dashed border-white/15 rounded-2xl px-16 py-10 text-center hover:border-[#3fd2d7]/50 transition-colors">
-            <div className="text-4xl mb-3">🖼️</div>
-            <div className="font-mono text-xs tracking-widest text-white/50 uppercase">drop an image anywhere · or click</div>
+          <div className="font-serif-display italic text-6xl text-white">lumitone</div>
+          <div className="font-mono-ui text-[10px] tracking-[0.35em] text-white/40 uppercase">image → sound · sonification</div>
+          <div className="mt-8 border border-dashed border-white/20 rounded-2xl px-16 py-10 text-center hover:border-[#3fd2d7]/50 transition-colors">
+            <div className="text-white/40 mb-4 flex justify-center"><IcUpload /></div>
+            <div className="font-mono-ui text-xs tracking-widest text-white/50 uppercase">drop an image anywhere · or click</div>
           </div>
           <div className="flex gap-2 mt-2" data-ui>
             {(['sunset', 'ocean', 'forest', 'noir'] as const).map(k => (
@@ -459,11 +476,11 @@ export default function Home() {
       {showTitle && a && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none" style={{ animation: 'titleFade 3.6s ease forwards' }}>
           <div className="text-center">
-            <div className="font-mono text-[10px] tracking-[0.4em] text-[#3fd2d7] uppercase mb-3">scale match</div>
-            <div className="text-4xl sm:text-5xl font-bold italic text-white drop-shadow-[0_2px_16px_rgba(0,0,0,0.8)]">
+            <div className="font-mono-ui text-[10px] tracking-[0.4em] text-[#3fd2d7] uppercase mb-3">scale match</div>
+            <div className="font-serif-display italic text-5xl sm:text-6xl text-white drop-shadow-[0_2px_16px_rgba(0,0,0,0.9)]">
               {NOTE_NAMES[a.rootNote]} {SCALES[a.scaleKey].name}
             </div>
-            <div className="mt-3 font-mono text-[11px] text-white/60">{a.reason}</div>
+            <div className="mt-3 font-mono-ui text-[11px] text-white/60">{a.reason}</div>
             <div className="mt-5 flex gap-1.5 justify-center">
               {a.colors.map((c, i) => <div key={i} className="w-6 h-6 rounded-md border border-white/20" style={{ background: c }} />)}
             </div>
@@ -475,8 +492,8 @@ export default function Home() {
       {/* ── persistent corner badge ── */}
       {hasImage && (
         <div className={`absolute top-5 left-6 pointer-events-none transition-opacity duration-500 ${showUI || !playing ? 'opacity-100' : 'opacity-30'}`}>
-          <div className="font-bold italic text-white/90 text-lg drop-shadow-[0_1px_8px_rgba(0,0,0,0.9)]">lumitone</div>
-          {a && <div className="font-mono text-[10px] text-[#3fd2d7] tracking-wider mt-0.5">{NOTE_NAMES[a.rootNote]} {activeScaleName}</div>}
+          <div className="font-serif-display italic text-white/90 text-xl drop-shadow-[0_1px_8px_rgba(0,0,0,0.9)]">lumitone</div>
+          {a && <div className="font-mono-ui text-[10px] text-[#3fd2d7] tracking-wider mt-0.5">{NOTE_NAMES[a.rootNote]} {activeScaleName}</div>}
         </div>
       )}
 
@@ -490,7 +507,7 @@ export default function Home() {
           <div className="flex items-center gap-2 flex-wrap justify-center">
             <button onClick={togglePlay}
               className={`w-12 h-12 rounded-full font-bold flex items-center justify-center transition-colors ${playing ? 'bg-white text-black' : 'bg-[#3fd2d7]/15 text-[#3fd2d7] border border-[#3fd2d7]/50'}`}>
-              {playing ? '⏸' : '▶'}
+              {playing ? <IcPause /> : <IcPlay />}
             </button>
 
             <select value={dir} onChange={(e) => setDir(e.target.value as 'lr'|'rl'|'tb')} className={chip + ' appearance-none'}>
@@ -509,8 +526,8 @@ export default function Home() {
               {NOTE_NAMES.map(n => <option className="bg-[#111]" key={n} value={n}>{n}</option>)}
             </select>
 
-            <button className={chip} onClick={() => setDemoOpen(v => !v)}>demos ▾</button>
-            <button className={chip} onClick={() => setShowSettings(v => !v)}>⚙ tune</button>
+            <button className={chip + ' flex items-center gap-1.5'} onClick={() => setDemoOpen(v => !v)}>demos <IcChevron /></button>
+            <button className={chip + ' flex items-center gap-1.5'} onClick={() => setShowSettings(v => !v)}><IcTune /> tune</button>
             <button className={chip} onClick={() => fileRef.current?.click()}>new image</button>
           </div>
 
@@ -533,13 +550,13 @@ export default function Home() {
                   ['brightness gate', threshold, 0, 0.6, 0.01, setThreshold],
                 ] as const).map(([label, val, min, max, step, setter]) => (
                   <label key={label}>
-                    <div className="font-mono text-[9px] tracking-[0.2em] text-white/40 uppercase mb-1.5">{label} — {Math.round((val as number) * 100)}</div>
+                    <div className="font-mono-ui text-[9px] tracking-[0.2em] text-white/40 uppercase mb-1.5">{label} — {Math.round((val as number) * 100)}</div>
                     <input type="range" min={min} max={max} step={step} value={val}
                       onChange={(e) => (setter as (v: number) => void)(+e.target.value)}
                       className="w-full accent-[#3fd2d7]" />
                   </label>
                 ))}
-                <div className="col-span-3 font-mono text-[10px] text-white/35 text-center">
+                <div className="col-span-3 font-mono-ui text-[10px] text-white/35 text-center">
                   hold &amp; drag the image to sustain a moment
                   {a && ` · alternates: ${a.ranked.slice(1, 3).map(r => SCALES[r.key].name).join(', ')}`}
                 </div>
