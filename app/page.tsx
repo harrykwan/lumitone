@@ -425,13 +425,11 @@ export default function Home() {
         <input ref={fileRef} type="file" accept="image/*" hidden onChange={onFile} />
 
         {/* canvas */}
-        {hasImage && (
-          <div className="relative rounded-2xl overflow-hidden border border-[#26262e] select-none touch-none"
+        <div className={`relative rounded-2xl overflow-hidden border border-[#26262e] select-none touch-none ${hasImage ? '' : 'hidden'}`}
             onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp}>
             <canvas ref={imgCanvasRef} className="w-full block" />
             <canvas ref={glowCanvasRef} className="absolute inset-0 w-full h-full cursor-crosshair" />
-          </div>
-        )}
+        </div>
 
         {/* analysis */}
         {a && (
