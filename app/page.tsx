@@ -27,6 +27,30 @@ const SCALES: Record<string, ScaleDef> = {
 }
 
 const F_MIN = 70, F_MAX = 2200
+
+/* True-spectrum tuning: dominant wavelength → real light frequency ÷ 2^40 → Hz.
+   Whole visible rainbow lands ~350–720 Hz: the rainbow fits in one octave. */
+const HUE_LAMBDA: [number, number][] = [
+  [0, 700], [30, 617], [60, 580], [90, 550], [120, 531], [150, 510],
+  [180, 490], [210, 482], [240, 468], [270, 455], [300, 425], [330, 400], [360, 700],
+]
+function spectrumFreq(r: number, g: number, b: number): number | null {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b)
+  if (mx === mn) return null // achromatic: fall back to position pitch
+  const d = mx - mn
+  let hue: number
+  if (mx === r) hue = 60 * (((g - b) / d) % 6)
+  else if (mx === g) hue = 60 * ((b - r) / d + 2)
+  else hue = 60 * ((r - g) / d + 4)
+  if (hue < 0) hue += 360
+  let lambda = 560
+  for (let i = 1; i < HUE_LAMBDA.length; i++) {
+    const [h0, l0] = HUE_LAMBDA[i - 1], [h1, l1] = HUE_LAMBDA[i]
+    if (hue <= h1) { lambda = l0 + (l1 - l0) * (hue - h0) / (h1 - h0); break }
+  }
+  const thz = 299792.458 / lambda // km/s ÷ nm = THz
+  return (thz * 1e12) / 2 ** 40
+}
 const BINS = 56
 const VOICES = 22
 
@@ -70,7 +94,7 @@ export default function Home() {
   const rafRef = useRef(0)
   const imgDataRef = useRef<ImageData | null>(null)
   const dimsRef = useRef({ w: 0, h: 0 })
-  const settingsRef = useRef({ speed: 0.12, dir: 'lr' as 'lr'|'rl'|'tb', scaleKey: 'auto', rootNote: 'auto', threshold: 0.14, reverb: 0.4 })
+  const settingsRef = useRef({ speed: 0.12, dir: 'lr' as 'lr'|'rl'|'tb', scaleKey: 'auto', rootNote: 'auto', threshold: 0.14, reverb: 0.4, tuning: 'scale' as 'scale'|'spectrum' })
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [playing, setPlaying] = useState(false)
@@ -82,12 +106,13 @@ export default function Home() {
   const [dir, setDir] = useState<'lr'|'rl'|'tb'>('lr')
   const [reverb, setReverb] = useState(0.4)
   const [threshold, setThreshold] = useState(0.14)
+  const [tuning, setTuning] = useState<'scale' | 'spectrum'>('scale')
   const [showUI, setShowUI] = useState(true)
   const [showTitle, setShowTitle] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [demoOpen, setDemoOpen] = useState(false)
 
-  useEffect(() => { settingsRef.current = { speed, dir, scaleKey, rootNote, threshold, reverb } })
+  useEffect(() => { settingsRef.current = { speed, dir, scaleKey, rootNote, threshold, reverb, tuning } })
 
   /* ── Auto-hide UI (cinema style) ── */
   const pokeUI = useCallback(() => {
@@ -360,7 +385,8 @@ export default function Home() {
       const amp = clamp(lum * 0.85 + (mx - mn) * 0.3)
       if (amp > st.threshold * 0.5) {
         const cont = F_MAX * Math.pow(F_MIN / F_MAX, t)
-        bins.push({ freq: quantize(cont, rootMidi, scaleDef.intervals), amp, t })
+        const spec = st.tuning === 'spectrum' ? spectrumFreq(r, g, b) : null
+        bins.push({ freq: spec ?? quantize(cont, rootMidi, scaleDef.intervals), amp, t })
       }
     }
     bins.sort((A, B) => B.amp - A.amp)
@@ -393,7 +419,7 @@ export default function Home() {
       lastColRef.current = { x: colKey, t: nowMs }
     } else if (newCol) {
       lastColRef.current = { x: colKey, t: nowMs }
-      const events: { i: number; delta: number; pri: number }[] = []
+      const events: { i: number; delta: number; pri: number; f: number }[] = []
       const seen = new Set<number>()
       for (const bin of bins) {
         const bi = Math.round(bin.t * (BINS - 1))
@@ -402,11 +428,11 @@ export default function Home() {
         const delta = bin.amp - prevAmp[bi]
         // rising edge → accent note (high priority)
         if (delta > 0.05 && bin.amp > st.threshold) {
-          events.push({ i: bi, delta, pri: delta + 1 })
+          events.push({ i: bi, delta, pri: delta + 1, f: bin.freq })
         }
         // bright row that hasn't fired recently → keep-alive note
         else if (bin.amp > st.threshold + 0.2 && nowMs - lastFire[bi] > 280) {
-          events.push({ i: bi, delta: 0.02, pri: bin.amp })
+          events.push({ i: bi, delta: 0.02, pri: bin.amp, f: bin.freq })
         }
       }
       events.sort((A, B) => B.pri - A.pri)
@@ -415,9 +441,7 @@ export default function Home() {
         const t = ev.i / (BINS - 1)
         const amp = Math.max(prevAmp[ev.i] + ev.delta, st.threshold + 0.05)
         lastFire[ev.i] = nowMs + k * 55
-        const cont = F_MAX * Math.pow(F_MIN / F_MAX, t)
-        const freq = quantize(cont, rootMidi, scaleDef.intervals)
-        window.setTimeout(() => pluckNote(freq, amp, (t - 0.5) * 1.6, wave), k * 55)
+        window.setTimeout(() => pluckNote(ev.f, amp, (t - 0.5) * 1.6, wave), k * 55)
       })
     }
 
@@ -600,7 +624,9 @@ export default function Home() {
       {hasImage && (
         <div className={`absolute top-5 left-6 pointer-events-none transition-opacity duration-500 ${showUI || !playing ? 'opacity-100' : 'opacity-30'}`}>
           <div className="font-mono-ui font-bold tracking-[0.22em] text-white/90 text-base lowercase drop-shadow-[0_1px_8px_rgba(0,0,0,0.9)]">lumitone</div>
-          {a && <div className="font-mono-ui text-[10px] text-[#3fd2d7] tracking-wider mt-0.5">{NOTE_NAMES[a.rootNote]} {activeScaleName}</div>}
+          <div className="font-mono-ui text-[10px] text-[#3fd2d7] tracking-wider mt-0.5">
+            {tuning === 'spectrum' ? 'true spectrum · rainbow in 1 octave' : a ? `${NOTE_NAMES[a.rootNote]} ${activeScaleName}` : ''}
+          </div>
         </div>
       )}
 
@@ -623,12 +649,17 @@ export default function Home() {
               <option className="bg-[#111]" value="tb">top ↓ bottom</option>
             </select>
 
-            <select value={scaleKey} onChange={(e) => setScaleKey(e.target.value)} className={chip + ' appearance-none'}>
+            <select value={tuning} onChange={(e) => setTuning(e.target.value as 'scale' | 'spectrum')} className={chip + ' appearance-none'}>
+              <option className="bg-[#111]" value="scale">scale match</option>
+              <option className="bg-[#111]" value="spectrum">true spectrum</option>
+            </select>
+
+            <select value={scaleKey} disabled={tuning === 'spectrum'} onChange={(e) => setScaleKey(e.target.value)} className={chip + ' appearance-none' + (tuning === 'spectrum' ? ' opacity-40' : '')}>
               <option className="bg-[#111]" value="auto">auto{a ? ` — ${SCALES[a.scaleKey].name}` : ''}</option>
               {Object.entries(SCALES).map(([k, s]) => <option className="bg-[#111]" key={k} value={k}>{s.name}</option>)}
             </select>
 
-            <select value={rootNote} onChange={(e) => setRootNote(e.target.value)} className={chip + ' appearance-none'}>
+            <select value={rootNote} disabled={tuning === 'spectrum'} onChange={(e) => setRootNote(e.target.value)} className={chip + ' appearance-none' + (tuning === 'spectrum' ? ' opacity-40' : '')}>
               <option className="bg-[#111]" value="auto">auto{a ? ` — ${NOTE_NAMES[a.rootNote]}` : ''}</option>
               {NOTE_NAMES.map(n => <option className="bg-[#111]" key={n} value={n}>{n}</option>)}
             </select>
